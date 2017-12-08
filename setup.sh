@@ -1,5 +1,8 @@
 #!/bin/bash -e
 
+# COMMENT:  Started to adjust this so debian stretch is supported also. 
+# THIS is NOT WORKING YET. 
+
 # == Update to 17.10 if required:
 # nano /etc/update-manager/release-upgrades -> Prompt=normal
 # apt-get update
@@ -19,16 +22,30 @@ function exit_badly {
   exit 1
 }
 
-[[ $(lsb_release -rs) == "17.10" ]] || exit_badly "This script is for Ubuntu 17.10 only, aborting (if you know what you are doing, delete this check)."
+if [ ! -f /usr/bin/lsb_release ]; then 
+    echo "Missing lsb-release, please wait, installing now"
+    apt-get -qy install lsb-release 
+fi
+
+if [ ! -f /usr/bin/dig ]; then 
+    echo "missing package dnsutils, please wait, installing now."
+    apt-get -qy install dnsutils
+fi
+
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Debian" ]] && [[ "$(lsb_release -c | awk '{ print $NF }')" == "stretch" ]] || [[ $(lsb_release -rs) == "17.10" ]] || exit_badly "This script is for Ubuntu 17.10 and Debian Stretch only, aborting (if you know what you are doing, delete this check)."
 [[ $(id -u) -eq 0 ]] || exit_badly "Please re-run as root (e.g. sudo ./path/to/this/script)"
 
 echo "--- Configuration: VPN settings ---"
 echo
 
 echo "** Note: hostname must resolve to this machine already, to enable Let's Encrypt certificate setup **"
-read -p "Hostname for VPN (e.g. vpn.example.com): " VPNHOST
+VPNHOST=${VPNHOST:-$(hostname -f)}
 
-VPNHOSTIP=$(dig -4 +short "$VPNHOST")
+#VPNHOSTIP=$(dig -4 +short "$VPNHOST")
+
+if [ $(ping -c1 $(hostname -f) | grep $(hostname -i) | wc -l) -eq 2 ]; then 
+    VPNHOSTIP=$(hostname -i)
+fi
 [[ -n "$VPNHOSTIP" ]] || exit_badly "Cannot resolve VPN hostname, aborting"
 
 read -p "VPN username: " VPNUSERNAME
@@ -79,11 +96,15 @@ apt-get -o Acquire::ForceIPv4=true update && apt-get upgrade -y
 debconf-set-selections <<< "postfix postfix/mailname string ${VPNHOST}"
 debconf-set-selections <<< "postfix postfix/main_mailer_type string 'Internet Site'"
 
-apt-get install -y language-pack-en strongswan strongswan-ikev2 libstrongswan-standard-plugins strongswan-libcharon libcharon-standard-plugins libcharon-extra-plugins moreutils iptables-persistent postfix mailutils unattended-upgrades certbot
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Ubuntu" ]] \
+ && apt-get install -y language-pack-en strongswan strongswan-ikev2 libstrongswan-standard-plugins strongswan-libcharon libcharon-standard-plugins libcharon-extra-plugins moreutils iptables-persistent postfix mailutils unattended-upgrades certbot
+
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Debian" ]] \
+ && apt-get install -y strongswan strongswan-ikev2 libstrongswan-standard-plugins libstrongswan-extra-plugins strongswan-libcharon libcharon-extra-plugins moreutils iptables-persistent postfix mailutils unattended-upgrades certbot
 
 
 ETH0ORSIMILAR=$(ip route get 8.8.8.8 | awk -- '{printf $5}')
-IP=$(ifdata -pa $ETH0ORSIMILAR)
+IP=$(hostname -i)
 
 echo
 echo "Network interface: ${ETH0ORSIMILAR}"
@@ -165,7 +186,9 @@ echo
 echo "--- Configuring RSA certificates ---"
 echo
 
-mkdir -p /etc/letsencrypt
+if [ ! -d /etc/letsencrypt ]; then 
+    mkdir -p /etc/letsencrypt
+fi
 
 echo 'rsa-key-size = 4096
 pre-hook = /sbin/iptables -I INPUT -p tcp --dport 443 -j ACCEPT
@@ -173,18 +196,24 @@ post-hook = /sbin/iptables -D INPUT -p tcp --dport 443 -j ACCEPT
 renew-hook = /usr/sbin/ipsec reload && /usr/sbin/ipsec secrets
 ' > /etc/letsencrypt/cli.ini
 
-certbot certonly --non-interactive --agree-tos --email $EMAIL --standalone -d $VPNHOST
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Ubuntu" ]] \
+&& certbot certonly --non-interactive --agree-tos --email $EMAIL --standalone -d $VPNHOST
 
-ln -f -s /etc/letsencrypt/live/$VPNHOST/cert.pem    /etc/ipsec.d/certs/cert.pem
-ln -f -s /etc/letsencrypt/live/$VPNHOST/privkey.pem /etc/ipsec.d/private/privkey.pem
-ln -f -s /etc/letsencrypt/live/$VPNHOST/chain.pem   /etc/ipsec.d/cacerts/chain.pem
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Ubuntu" ]] \
+&& ln -f -s /etc/letsencrypt/live/$VPNHOST/cert.pem    /etc/ipsec.d/certs/cert.pem
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Ubuntu" ]] \
+&& ln -f -s /etc/letsencrypt/live/$VPNHOST/privkey.pem /etc/ipsec.d/private/privkey.pem
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Ubuntu" ]] \
+&& ln -f -s /etc/letsencrypt/live/$VPNHOST/chain.pem   /etc/ipsec.d/cacerts/chain.pem
 
-grep -Fq 'jawj/IKEv2-setup' /etc/apparmor.d/local/usr.lib.ipsec.charon || echo "
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Ubuntu" ]] \
+&& grep -Fq 'jawj/IKEv2-setup' /etc/apparmor.d/local/usr.lib.ipsec.charon || echo "
 # https://github.com/jawj/IKEv2-setup
 /etc/letsencrypt/archive/${VPNHOST}/* r,
 " >> /etc/apparmor.d/local/usr.lib.ipsec.charon
 
-aa-status --enabled && invoke-rc.d apparmor reload
+[[ "$(lsb_release -i | awk '{ print $NF }')" == "Ubuntu" ]] \
+&& aa-status --enabled && invoke-rc.d apparmor reload
 
 
 echo
