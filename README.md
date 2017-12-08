@@ -2,6 +2,7 @@
 
 ## What?
 
+This is not a working script, this is a work in progress to support Debian Stretch also.
 A Bash script that takes Ubuntu Server 17.10 (and probably also 17.04 or 16.10, but these are no longer tested) from clean install to production-ready IKEv2 VPN with strongSwan. Comments and pull requests welcome.
 
 ### VPN server
